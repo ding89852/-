@@ -1,20 +1,3 @@
-# -*- coding: utf-8 -*-
-"""当代人工智能实验一：新闻文本十分类
-
-本脚本完成实验要求中的全部流程：
-  1. 数据加载与探索（EDA）
-  2. 训练集/验证集分层划分（测试集保持封存，不参与任何调参）
-  3. 文本预处理与特征表示（TF-IDF）对照实验实验
-  4. 四类分类算法的超参数调优（朴素贝叶斯 / 线性 SVM / 逻辑回归 / MLP）
-  5. 最优方案在验证集上的错误分析与交叉验证稳健性检验
-  6. 用全部有标签数据重训最优方案，输出 predictions.csv
-
-运行：python experiment1.py            # 完整实验
-      python experiment1.py --quick    # 快速冒烟测试（缩小网格）
-
-所有随机过程固定随机种子 SEED=42，结果可通过 outputs/ 下的表格与图复现。
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -50,15 +33,11 @@ from sklearn.neural_network import MLPClassifier
 from sklearn.pipeline import FeatureUnion
 from sklearn.svm import SVC, LinearSVC
 
-# --------------------------------------------------------------------------- #
-# 全局配置：固定随机种子，保证实验可复现
-# --------------------------------------------------------------------------- #
 SEED = 42
-VAL_SIZE = 0.15  # 从训练集中划出 15% 作为验证集
-# 本实验选用两种算法进行对比：线性支持向量机与逻辑回归
-# （依据实验指导：文本数据高维稀疏，线性模型表现好且训练快，便于公平比较）
+VAL_SIZE = 0.15
+
 ALGORITHMS = ["SVM", "LR"]
-# --quick 只做缩小网格的冒烟测试，不写预测文件
+
 QUICK_MODE = False
 DATA_DIR = Path(__file__).resolve().parent
 OUT_DIR = DATA_DIR / "outputs"
@@ -70,9 +49,7 @@ for _d in (FIG_DIR, RES_DIR, LOG_DIR):
 
 LOG = logging.getLogger("exp1")
 
-
 def setup_logging(tag: str) -> Path:
-    """只输出到控制台；不再生成日志文件。"""
     log_path = LOG_DIR / f"run_{tag}.log"
     LOG.setLevel(logging.INFO)
     LOG.handlers.clear()
@@ -82,19 +59,13 @@ def setup_logging(tag: str) -> Path:
     LOG.addHandler(sh)
     return log_path
 
-
 def set_plot_style() -> None:
     plt.rcParams["font.sans-serif"] = ["SimHei", "Microsoft YaHei", "DejaVu Sans"]
     plt.rcParams["axes.unicode_minus"] = False
     plt.rcParams["figure.dpi"] = 130
     plt.rcParams["savefig.bbox"] = "tight"
 
-
-# --------------------------------------------------------------------------- #
-# 1. 数据加载与探索
-# --------------------------------------------------------------------------- #
 def load_data():
-    """使用 draft_main.py 的 load_data() 读取课程数据，再转成 DataFrame。"""
     old_cwd = Path.cwd()
     try:
         os.chdir(DATA_DIR)
@@ -106,9 +77,7 @@ def load_data():
     assert train_df["text"].notna().all() and test_df["text"].notna().all()
     return train_df, test_df
 
-
 def run_eda(train_df: pd.DataFrame, test_df: pd.DataFrame) -> dict:
-    """数据探索：规模、类别分布、文本长度、重复样本检查。"""
     y = train_df["target"]
     word_len = train_df["text"].str.split().apply(len)
     dup = int(train_df["text"].duplicated().sum())
@@ -150,10 +119,6 @@ def run_eda(train_df: pd.DataFrame, test_df: pd.DataFrame) -> dict:
     )
     return stats
 
-
-# --------------------------------------------------------------------------- #
-# 2. 文本预处理（对照实验实验用）
-# --------------------------------------------------------------------------- #
 _HEADER_RE = re.compile(r"^[A-Za-z][A-Za-z0-9-]{1,20}:")
 _QUOTE_RE = re.compile(r"^\s*>.*$", re.M)
 _SIG_RE = re.compile(r"^\s*--\s*$")
@@ -161,12 +126,7 @@ _URL_RE = re.compile(r"https?://\S+|www\.\S+")
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 _NUM_RE = re.compile(r"\b\d[\d.,]*\b")
 
-
 def strip_headers(text: str) -> str:
-    """去掉新闻组邮件的头部字段（From/Subject/Organization/...）。
-
-    仅在正文前的连续头部区域存在 ``字段名: 值`` 时才删除，避免误删正文。
-    """
     lines = text.split("\n")
     for i, line in enumerate(lines):
         if line.strip() == "":
@@ -176,9 +136,7 @@ def strip_headers(text: str) -> str:
             return text
     return text
 
-
 def strip_quotes(text: str) -> str:
-    """去掉引用行（以 > 开头）与签名之后的内容，减少噪声。"""
     text = _QUOTE_RE.sub("", text)
     lines = text.split("\n")
     out = []
@@ -188,14 +146,11 @@ def strip_quotes(text: str) -> str:
         out.append(line)
     return "\n".join(out)
 
-
 def normalize_tokens(text: str) -> str:
-    """把邮箱/URL/数字替换为占位符，降低对具体地址与数值的记忆。"""
     text = _EMAIL_RE.sub(" emailtoken ", text)
     text = _URL_RE.sub(" urltoken ", text)
     text = _NUM_RE.sub(" numtoken ", text)
     return text
-
 
 PREPROCESSORS = {
     "raw": lambda t: t,
@@ -206,45 +161,33 @@ PREPROCESSORS = {
     "noheader_noquote_norm": lambda t: normalize_tokens(strip_quotes(strip_headers(t))),
 }
 
-
 def make_preprocessor(name: str):
     fn = PREPROCESSORS[name]
     return lambda texts: [fn(t) for t in texts]
 
-
-# --------------------------------------------------------------------------- #
-# 3. 特征表示（TF-IDF）配置
-# --------------------------------------------------------------------------- #
 VECTORIZERS = {
-    # 与 draft_main.py 提供的默认配置一致，作为基线
+
     "V0_draft_5k": dict(max_features=5000),
-    # 扩大词表 + 次线性 TF 缩放
+
     "V1_word20k": dict(max_features=20000, min_df=2, sublinear_tf=True),
-    # 加入二元词组
+
     "V2_word20k_12gram": dict(
         max_features=50000, min_df=2, sublinear_tf=True, ngram_range=(1, 2)
     ),
-    # 去掉英文停用词
+
     "V3_word20k_stop": dict(
         max_features=20000, min_df=2, sublinear_tf=True, stop_words="english"
     ),
-    # 词表大小敏感性：更小的词表
+
     "V4_word5k_sublinear": dict(max_features=5000, min_df=2, sublinear_tf=True),
 }
 
-
 def make_vectorizer(name: str):
-    """按名称构造向量化器（纯词级 TF-IDF，或词级 + 字符级联合表示）。"""
     if name == "V5_wordchar_union":
         return make_union_vectorizer()
     return TfidfVectorizer(**VECTORIZERS[name])
 
-
 class VectorCache:
-    """缓存 (预处理, 向量化器) 组合在训练集上拟合出的矩阵。
-
-    统计量（IDF、词表）只在训练集上拟合，验证集仅做 transform，避免数据泄露。
-    """
 
     def __init__(self, prep: str, vec: str):
         self.prep = prep
@@ -262,11 +205,7 @@ class VectorCache:
         self.matrices = (A_tr, A_va)
         return self.matrices
 
-# --------------------------------------------------------------------------- #
-# 4. 分类器与统一的评估接口
-# --------------------------------------------------------------------------- #
 def build_model(family: str, params: dict):
-    """按算法族与超参数构造分类器，所有随机过程固定种子。"""
     params = dict(params)
     if isinstance(params.get("hidden_layer_sizes"), list):
         params["hidden_layer_sizes"] = tuple(params["hidden_layer_sizes"])
@@ -282,9 +221,7 @@ def build_model(family: str, params: dict):
         return MLPClassifier(**{**params, "random_state": SEED})
     raise ValueError(f"未知算法族: {family}")
 
-
 def evaluate_model(model, A_tr, y_tr, A_va, y_va) -> dict:
-    """在训练集上拟合，并在验证集上给出准确率 / 宏 F1 / 加权 F1。"""
     t0 = time.time()
     model.fit(A_tr, y_tr)
     fit_time = time.time() - t0
@@ -296,18 +233,14 @@ def evaluate_model(model, A_tr, y_tr, A_va, y_va) -> dict:
         "fit_seconds": round(fit_time, 2),
     }
 
-
 def _jsonable(obj):
-    """把元组等不可直接 JSON 序列化的对象转成列表。"""
     if isinstance(obj, dict):
         return {k: _jsonable(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
         return [_jsonable(v) for v in obj]
     return obj
 
-
 def cfg_key(row: dict) -> str:
-    """把一条配置编码成可比较的字符串主键，用于断点续跑。"""
     params = row["params"]
     if isinstance(params, str):
         params = json.loads(params)
@@ -315,15 +248,12 @@ def cfg_key(row: dict) -> str:
     parts.append(json.dumps(_jsonable(params), sort_keys=True, ensure_ascii=False))
     return "|".join(parts)
 
-
 def load_results(path: Path) -> list:
     if path.exists():
         return pd.read_csv(path).to_dict("records")
     return []
 
-
 def save_results(rows: list, path: Path) -> None:
-    """写盘前把 params 统一序列化为 JSON 字符串，保证 CSV 可直接回读。"""
     out = []
     for r in rows:
         r = dict(r)
@@ -332,9 +262,7 @@ def save_results(rows: list, path: Path) -> None:
         out.append(r)
     pd.DataFrame(out).to_csv(path, index=False, encoding="utf-8-sig")
 
-
 def run_configs(configs, path: Path, evaluate_fn, cache: dict):
-    """逐条执行配置并即时落盘，已完成的配置自动跳过（支持断点续跑）。"""
     rows = load_results(path)
     done = {cfg_key(r) for r in rows}
     for i, cfg in enumerate(configs, 1):
@@ -364,13 +292,9 @@ def run_configs(configs, path: Path, evaluate_fn, cache: dict):
         done.add(key)
     return rows
 
-
-# --------------------------------------------------------------------------- #
-# 5. 阶段一：预处理与特征表示对照实验
-# --------------------------------------------------------------------------- #
 def stage_representation(ctx, quick: bool):
     LOG.info("=" * 30 + " 阶段一：预处理 / 特征表示对照实验 " + "=" * 30)
-    probe = {"family": "LinearSVM", "params": {"C": 1.0}}  # 固定探针模型，只变表示
+    probe = {"family": "LinearSVM", "params": {"C": 1.0}}
     prep_list = ["raw", "noquote_only", "noheader", "noheader_noquote",
                  "noheader_norm", "noheader_noquote_norm"]
     vec_list = ["V0_draft_5k", "V1_word20k", "V2_word20k_12gram", "V3_word20k_stop",
@@ -380,7 +304,7 @@ def stage_representation(ctx, quick: bool):
         vec_list = ["V0_draft_5k", "V1_word20k"]
 
     path = RES_DIR / "stage1_representation.csv"
-    # (1) 预处理对照实验：固定 V1 表示与同一个探针分类器，只改变文本清洗方式
+
     prep_configs = [
         dict(stage="repr_prep", prep=p, vectorizer="V1_word20k", **probe) for p in prep_list
     ]
@@ -391,7 +315,6 @@ def stage_representation(ctx, quick: bool):
     LOG.info("预处理对照实验最佳: %s (macroF1=%.4f)",
              best_prep["prep"], best_prep["val_macro_f1"])
 
-    # (2) 特征表示对照实验：固定上一步的最佳预处理，只改变 TF-IDF 配置
     vec_configs = [
         dict(stage="repr_vec", prep=best_prep["prep"], vectorizer=v, **probe)
         for v in vec_list
@@ -403,7 +326,6 @@ def stage_representation(ctx, quick: bool):
     LOG.info("最佳预处理: %s (macroF1=%.4f)", best_prep["prep"], best_prep["val_macro_f1"])
     LOG.info("最佳表示: %s (macroF1=%.4f)", best_vec["vectorizer"], best_vec["val_macro_f1"])
 
-    # 交叉验证最佳组合（是否最佳预处理 × 最佳表示的组合更好）
     combo_prep, combo_vec = best_prep["prep"], best_vec["vectorizer"]
     combo = dict(stage="repr_combo", prep=combo_prep, vectorizer=combo_vec, **probe)
     rows = run_configs([combo], RES_DIR / "stage1_representation.csv", ctx["eval"], ctx["cache"])
@@ -424,32 +346,25 @@ def stage_representation(ctx, quick: bool):
     plt.close(fig)
     return combo_prep, combo_vec
 
-
-# --------------------------------------------------------------------------- #
-# 6. 阶段二：各算法超参数调优（验证集）
-# --------------------------------------------------------------------------- #
 TUNING_GRIDS = {
-    # 线性 SVM：C 控制对训练样本的惩罚力度，另加两个 RBF 核配置做核函数对照
+
     "SVM": [
         {"kernel": "linear", "C": c} for c in (0.1, 1.0, 10.0, 100.0)
     ] + [
         {"kernel": "rbf", "C": c, "gamma": "scale"} for c in (1.0, 10.0)
     ],
-    # SVM 的 liblinear 实现（训练更快），用于在相同特征上与 SVC 互为参照
+
     "LinearSVM": [
         {"C": c, "max_iter": 5000} for c in (0.1, 1.0, 10.0, 100.0)
     ],
-    # 逻辑回归：C 是正则化强度的倒数，max_iter 保证收敛
+
     "LR": [
         {"C": c, "max_iter": 1000, "solver": "lbfgs"} for c in (0.1, 1.0, 10.0, 100.0)
     ],
 }
 
-
 def normalize_params(params: dict) -> dict:
-    """元组 -> 列表，便于写入 JSON/CSV。"""
     return {k: (list(v) if isinstance(v, tuple) else v) for k, v in params.items()}
-
 
 def stage_tuning(ctx, prep: str, vec: str, quick: bool):
     LOG.info("=" * 30 + " 阶段二：超参数调优 " + "=" * 30)
@@ -460,7 +375,7 @@ def stage_tuning(ctx, prep: str, vec: str, quick: bool):
             "LinearSVM": [{"C": 1.0, "max_iter": 5000}],
             "LR": [{"C": 1.0, "max_iter": 1000, "solver": "lbfgs"}],
         }
-    # MLP 需要可哈希的元组：从 JSON 恢复时转回 tuple
+
     configs = []
     for family, plist in grids.items():
         for params in plist:
@@ -476,11 +391,7 @@ def stage_tuning(ctx, prep: str, vec: str, quick: bool):
              best["params"], best["val_accuracy"], best["val_macro_f1"])
     return best
 
-# --------------------------------------------------------------------------- #
-# 7. 阶段三：创新尝试（联合特征表示 + 集成学习）
-# --------------------------------------------------------------------------- #
 def make_union_vectorizer():
-    """词级 TF-IDF 与字符级 TF-IDF 的联合表示（创新点：互信息视角下的互补特征）。"""
     return FeatureUnion(
         [
             ("word", TfidfVectorizer(max_features=30000, min_df=2, sublinear_tf=True)),
@@ -489,9 +400,7 @@ def make_union_vectorizer():
         ]
     )
 
-
 def build_estimator(family: str, params: dict):
-    """支持调优算法族 + 集成模型。"""
     if family == "Stacking":
         from sklearn.ensemble import StackingClassifier
 
@@ -509,9 +418,7 @@ def build_estimator(family: str, params: dict):
         )
     return build_model(family, params)
 
-
 def stage_innovation(ctx, prep: str, best_cfg: dict, quick: bool):
-    """在最优调参配置的表示基础上，尝试联合特征与集成学习。"""
     LOG.info("=" * 30 + " 阶段三：创新尝试 " + "=" * 30)
     path = RES_DIR / "stage3_innovation.csv"
     rows = load_results(path)
@@ -544,7 +451,6 @@ def stage_innovation(ctx, prep: str, best_cfg: dict, quick: bool):
         save_results(rows, path)
         done.add(key)
 
-    # (a) 词级 + 字符级 TF-IDF 联合表示，与纯词级表示对照（同一算法、同一超参数）
     probe("V1_word20k", "LinearSVM", {"C": 1.0}, "对照：纯词级 TF-IDF")
     probe("V5_wordchar_union", "LinearSVM", {"C": 1.0},
           "创新：词级 + 字符级 TF-IDF 联合表示")
@@ -556,10 +462,6 @@ def stage_innovation(ctx, prep: str, best_cfg: dict, quick: bool):
           "创新：联合表示 + 栈式集成")
     return pd.read_csv(path)
 
-
-# --------------------------------------------------------------------------- #
-# 8. 阶段四：稳健性检验（重复分层交叉验证）
-# --------------------------------------------------------------------------- #
 def stage_robustness(ctx, candidates: list, quick: bool):
     LOG.info("=" * 30 + " 阶段四：稳健性检验（5 折 × 3 种子） " + "=" * 30)
     path = RES_DIR / "stage4_robustness.csv"
@@ -570,7 +472,7 @@ def stage_robustness(ctx, candidates: list, quick: bool):
     for cfg in candidates:
         family = cfg["family"]
         if family in {"Stacking", "Vote"}:
-            continue  # 集成模型内部已含交叉验证，只在验证集上比较
+            continue
         params = cfg["params"] if isinstance(cfg["params"], dict) else json.loads(cfg["params"])
         p = dict(params)
         if "hidden_layer_sizes" in p:
@@ -605,12 +507,7 @@ def stage_robustness(ctx, candidates: list, quick: bool):
             save_results(rows, path)
     return pd.read_csv(path)
 
-
-# --------------------------------------------------------------------------- #
-# 9. 阶段五：最优模型的错误分析与最终预测
-# --------------------------------------------------------------------------- #
 def stage_error_analysis(ctx, best, prep, vec):
-    """在验证集上做错误分析：混淆矩阵、各类别 P/R/F1、长度分层表现、错例清单。"""
     LOG.info("=" * 30 + " 阶段五：错误分析 " + "=" * 30)
     cache_key = (prep, vec)
     if cache_key not in ctx["cache"]:
@@ -660,7 +557,6 @@ def stage_error_analysis(ctx, best, prep, vec):
     fig.savefig(FIG_DIR / "fig6_confusion_matrix.png")
     plt.close(fig)
 
-    # 混淆最严重的类别对
     off = cm.copy()
     np.fill_diagonal(off, 0)
     pairs = []
@@ -674,7 +570,6 @@ def stage_error_analysis(ctx, best, prep, vec):
         for n, a, b in pairs[:15]:
             f.write(f"  {a} -> {b} : {n}\n")
 
-    # 长度分层表现
     X_va_raw = ctx["eval"]["X_va"]
     lengths = np.array([len(t.split()) for t in X_va_raw])
     buckets = [(0, 100), (100, 200), (200, 400), (400, 800), (800, 10 ** 9)]
@@ -704,7 +599,6 @@ def stage_error_analysis(ctx, best, prep, vec):
     fig.savefig(FIG_DIR / "fig7_error_analysis.png")
     plt.close(fig)
 
-    # 错例清单
     err_idx = np.where(pred != np.asarray(y_va))[0]
     err_rows = []
     for i in err_idx[:200]:
@@ -719,9 +613,7 @@ def stage_error_analysis(ctx, best, prep, vec):
     return {"n_errors": int(len(err_idx)),
             "top_confusion": [(int(n), int(a), int(b)) for n, a, b in pairs[:5]]}
 
-
 def stage_final(ctx, best, prep, vec, refit_full: bool = True):
-    """用锁定配置重训（默认用全部有标签数据），预测无标签测试集并保存提交文件。"""
     LOG.info("=" * 30 + " 阶段六：最终训练与预测提交 " + "=" * 30)
     X_all, y_all = ctx["X_all"], ctx["y_all"]
     X_test = ctx["X_test"]
@@ -740,7 +632,7 @@ def stage_final(ctx, best, prep, vec, refit_full: bool = True):
     sub = pd.DataFrame({"target": pred.astype(int)})
     if not QUICK_MODE:
         sub_path = DATA_DIR / "predictions.csv"
-        sub.to_csv(sub_path, index=False, header=False)  # 与示例格式一致：无表头、无索引
+        sub.to_csv(sub_path, index=False, header=False)
 
     dist = sub["target"].value_counts().sort_index()
     train_dist = pd.Series(y_all).value_counts(normalize=True).sort_index()
@@ -782,24 +674,17 @@ def stage_final(ctx, best, prep, vec, refit_full: bool = True):
     LOG.info("预测类别分布:\n%s", cmp.to_string())
     return meta
 
-# --------------------------------------------------------------------------- #
-# 10. 图表：超参数调优曲线与模型对比
-# --------------------------------------------------------------------------- #
 def parse_params(v):
     return v if isinstance(v, dict) else json.loads(v)
 
-
 def _mpl(params):
-    """把 MLP 参数元组恢复为可读标签。"""
     p = dict(params)
     for k in list(p):
         if isinstance(p[k], list):
             p[k] = tuple(p[k])
     return p
 
-
 def fig_tuning_curves(quick: bool = False):
-    """两种算法在验证集上的超参数调优曲线（报告用紧凑版）。"""
     df = pd.read_csv(RES_DIR / "stage2_tuning.csv")
     df["p"] = df["params"].apply(parse_params)
     fig, axes = plt.subplots(1, 2, figsize=(9.4, 3.2))
@@ -854,9 +739,7 @@ def fig_tuning_curves(quick: bool = False):
     fig.savefig(FIG_DIR / "fig3_tuning_curves.png")
     plt.close(fig)
 
-
 def fig_model_comparison():
-    """把基线、各算法最优配置与创新方案的验证集表现汇总对比。"""
     rows = []
     repr_df = pd.read_csv(RES_DIR / "stage1_representation.csv")
     base = repr_df[(repr_df.vectorizer == "V0_draft_5k") & (repr_df.stage == "repr_vec")]
@@ -898,7 +781,6 @@ def fig_model_comparison():
     plt.close(fig)
     return rows
 
-
 def fig_robustness():
     path = RES_DIR / "stage4_robustness.csv"
     if not path.exists():
@@ -918,19 +800,8 @@ def fig_robustness():
     fig.savefig(FIG_DIR / "fig5_robustness.png")
     plt.close(fig)
 
-
-# --------------------------------------------------------------------------- #
-# 11. 主流程
-# --------------------------------------------------------------------------- #
-
 def fig_loss_curve(prep: str = "raw", vec: str = "V3_word20k_stop",
                    C: float = 10.0, max_iter: int = 100) -> dict:
-    """绘制逻辑回归 softmax 交叉熵的训练损失收敛曲线。
-
-    为避免依赖第三方训练日志，这里在同一训练子集和 20k 词级 TF-IDF 表示上，
-    用 SciPy L-BFGS-B 复现逻辑回归的目标函数，并记录每次迭代的训练平均交叉熵。
-    同一配置的 scikit-learn LogisticRegression 结果只用于核对曲线终点。
-    """
     set_plot_style()
     train_df, _ = load_data()
     X_all = train_df["text"].astype(str).tolist()
@@ -994,7 +865,6 @@ def fig_loss_curve(prep: str = "raw", vec: str = "V3_word20k_stop",
     hist_obj = np.asarray(hist_obj, dtype=float)
     hist_ce = np.asarray(hist_ce, dtype=float)
 
-    # 用 sklearn 的同一配置核对终点，避免自定义实现给出不一致的损失量级。
     sklearn_lr = LogisticRegression(C=C, max_iter=1000, solver="lbfgs",
                                     random_state=SEED).fit(A_tr, y_tr)
     proba = sklearn_lr.predict_proba(A_tr)
@@ -1057,7 +927,6 @@ def fig_loss_curve(prep: str = "raw", vec: str = "V3_word20k_stop",
     return summary
 
 def clean_outputs(keep_files) -> None:
-    """删除中间产物，只保留报告需要的两张损失图与最终预测文件。"""
     keep = {Path(p).resolve() for p in keep_files}
     if OUT_DIR.exists():
         for path in sorted(OUT_DIR.rglob("*"), key=lambda p: len(p.parts), reverse=True):
@@ -1069,11 +938,10 @@ def clean_outputs(keep_files) -> None:
                     path.rmdir()
                 except OSError:
                     pass
-    # 冒烟测试的预测文件不属于正式交付，正式运行时清理掉。
+
     quick_pred = DATA_DIR / "predictions_quick.csv"
     if quick_pred.exists() and quick_pred.resolve() not in keep:
         quick_pred.unlink()
-
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="当代人工智能实验一：新闻文本十分类")
@@ -1094,7 +962,7 @@ def main(argv=None):
 
     X_all = train_df["text"].astype(str).tolist()
     y_all = train_df["target"].values
-    # 先划分，再只用训练集拟合特征统计量：避免验证集信息泄露
+
     X_tr, X_va, y_tr, y_va = train_test_split(
         X_all, y_all, test_size=VAL_SIZE, stratify=y_all, random_state=SEED
     )
@@ -1111,7 +979,6 @@ def main(argv=None):
     stage_tuning(ctx, prep, vec, args.quick)
     stage_innovation(ctx, prep, None, args.quick)
 
-    # 汇总所有候选方案，按验证集宏 F1 选出最终模型
     cand = []
     for path, stage in ((RES_DIR / "stage2_tuning.csv", "tuning"),
                         (RES_DIR / "stage3_innovation.csv", "innovation")):
@@ -1130,12 +997,11 @@ def main(argv=None):
              best_final["family"], best_final["prep"], best_final["vectorizer"],
              best_final["val_accuracy"], best_final["val_macro_f1"])
 
-    # 稳健性：两种算法各自的最佳配置做重复分层交叉验证
     group_of = {"SVM": "SVM", "LinearSVM": "SVM", "LR": "LR", "NB": "NB", "MLP": "MLP"}
     robust_list, seen_family = [], set()
     for c in cand:
         algo = group_of.get(c["family"])
-        if algo is None or algo in seen_family:  # 集成模型不在这一步重复检验
+        if algo is None or algo in seen_family:
             continue
         seen_family.add(algo)
         robust_list.append(c)
@@ -1150,7 +1016,7 @@ def main(argv=None):
     if args.quick:
         LOG.info("--quick 模式跳过损失曲线生成")
     else:
-        # 单入口：只生成报告需要的两张损失曲线，不落盘其它结果表或诊断图。
+
         import loss_curves
 
         LOG.info("生成报告用的两张损失曲线 ...")
@@ -1164,7 +1030,6 @@ def main(argv=None):
     else:
         LOG.info("实验结束。仅保留两张损失图与 predictions.csv；中间文件已清理")
     return meta
-
 
 if __name__ == "__main__":
     main()

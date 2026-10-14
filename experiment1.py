@@ -60,6 +60,13 @@ def setup_logging(tag: str) -> Path:
     return log_path
 
 def set_plot_style() -> None:
+    import matplotlib.font_manager as fm
+    for font_path in (r"C:\Windows\Fonts\msyh.ttc", r"C:\Windows\Fonts\simhei.ttf"):
+        if Path(font_path).exists():
+            try:
+                fm.fontManager.addfont(font_path)
+            except Exception:
+                pass
     plt.rcParams["font.sans-serif"] = ["SimHei", "Microsoft YaHei", "DejaVu Sans"]
     plt.rcParams["axes.unicode_minus"] = False
     plt.rcParams["figure.dpi"] = 130
